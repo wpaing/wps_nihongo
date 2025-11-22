@@ -1,0 +1,7 @@
+{
+  "name": "Nihongo Learning with WPS",
+  "description": "A comprehensive Japanese learning assistant for Myanmar speakers. Features grammar explanations, translation, reading practice, and image analysis using Gemini AI.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
