@@ -211,14 +211,21 @@ const ChatArea: React.FC<ChatAreaProps> = ({
               flex flex-col max-w-[88%] md:max-w-[80%]
               ${msg.role === 'user' ? 'items-end' : 'items-start'}
             `}>
-              {msg.image ? (
-                <div className="mb-3 rounded-2xl overflow-hidden border-4 border-white shadow-soft max-w-[200px] md:max-w-xs group cursor-zoom-in">
-                  <img src={msg.image} alt="Uploaded context" className="w-full h-auto transition-transform duration-500 group-hover:scale-105" />
+              {/* Image Rendering: Support both legacy 'image' and new 'images' array */}
+              {(msg.images || (msg.image ? [msg.image] : [])).length > 0 && (
+                <div className="mb-3 flex flex-wrap gap-2 justify-end">
+                  {(msg.images || (msg.image ? [msg.image] : [])).map((imgSrc, idx) => (
+                    <div key={idx} className="rounded-2xl overflow-hidden border-4 border-white shadow-soft max-w-[200px] md:max-w-xs group cursor-zoom-in relative">
+                      <img src={imgSrc} alt={`Attachment ${idx + 1}`} className="w-full h-auto transition-transform duration-500 group-hover:scale-105" />
+                    </div>
+                  ))}
                 </div>
-              ) : (msg as any).hasAttachment ? (
-                <div className="mb-2 px-3 py-2 rounded-xl border border-dashed border-stone-300 bg-stone-50 flex items-center gap-2 text-stone-400 text-xs font-medium">
+              )}
+              
+              {msg.hasAttachment && (!msg.images && !msg.image) ? (
+                 <div className="mb-2 px-3 py-2 rounded-xl border border-dashed border-stone-300 bg-stone-50 flex items-center gap-2 text-stone-400 text-xs font-medium">
                     <ImageIcon size={14} />
-                    <span>Image Attachment (Archived)</span>
+                    <span>Attachments (Archived)</span>
                 </div>
               ) : null}
               

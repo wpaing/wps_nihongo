@@ -72,7 +72,7 @@ const App: React.FC = () => {
             
             return {
               ...session,
-              messages: messages.map(msg => ({ ...msg, image: undefined, hasAttachment: !!msg.image })),
+              messages: messages.map(msg => ({ ...msg, image: undefined, images: undefined, hasAttachment: !!(msg.images?.length || msg.image) })), // Don't store full base64 in session history
               lastModified: Date.now(),
               title: title,
               preview: messages[messages.length - 1]?.text.slice(0, 50) || session.preview
@@ -172,9 +172,9 @@ const App: React.FC = () => {
   const currentSectionInfo = SECTIONS.find(s => s.id === currentSection);
   const handleFontSizeChange = (delta: number) => setFontSizeLevel(prev => Math.max(0, Math.min(3, prev + delta)));
 
-  const handleSendMessage = async (text: string, image?: string) => {
+  const handleSendMessage = async (text: string, images?: string[]) => {
     const timestamp = Date.now();
-    const newUserMsg: Message = { id: timestamp.toString(), role: 'user', text, timestamp, image };
+    const newUserMsg: Message = { id: timestamp.toString(), role: 'user', text, timestamp, images };
     
     let activeSessionId = currentSessionId;
     
@@ -197,7 +197,7 @@ const App: React.FC = () => {
     setIsLoading(true);
 
     try {
-      const { text: rawResponse, sources } = await generateResponse(text, image, currentSection);
+      const { text: rawResponse, sources } = await generateResponse(text, images, currentSection);
       
       let cleanText = rawResponse;
       let extractedVocab: VocabularyItem[] = [];

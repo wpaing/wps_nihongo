@@ -29,8 +29,9 @@ export interface Message {
   role: 'user' | 'model';
   text: string;
   timestamp: number;
-  image?: string; // Base64 string
-  hasAttachment?: boolean; // Flag to indicate if an image was present but stripped for storage
+  images?: string[]; // Array of Base64 strings
+  image?: string; // Legacy support
+  hasAttachment?: boolean; // Flag to indicate if images were present but stripped for storage
   vocabulary?: VocabularyItem[];
   sources?: WebSource[];
 }

@@ -1,9 +1,9 @@
 
 import React, { useState, useRef, useEffect } from 'react';
-import { Send, ImagePlus, X, Crop, Maximize, MousePointer2, Trash2, Mic, MicOff, Move, Layers, Bold, Italic, FileText, Paperclip, UploadCloud, FileStack } from 'lucide-react';
+import { Send, ImagePlus, X, Crop, Maximize, MousePointer2, Trash2, Mic, MicOff, Move, Layers, Bold, Italic, FileText, Paperclip, UploadCloud, FileStack, Edit } from 'lucide-react';
 
 interface InputAreaProps {
-  onSendMessage: (text: string, image?: string) => void;
+  onSendMessage: (text: string, images?: string[]) => void;
   isLoading: boolean;
 }
 
@@ -16,6 +16,16 @@ interface SelectionRect {
   style: 'normal' | 'bold' | 'italic';
 }
 
+interface Attachment {
+  id: string;
+  file: File;
+  preview: string;
+  type: 'image' | 'pdf';
+  original?: string; // Original base64 for cropping
+  selections?: SelectionRect[];
+  contextInfo?: string | null;
+}
+
 declare global {
   interface Window {
     SpeechRecognition: any;
@@ -25,15 +35,13 @@ declare global {
 
 const InputArea: React.FC<InputAreaProps> = ({ onSendMessage, isLoading }) => {
   const [text, setText] = useState('');
-  const [imagePreview, setImagePreview] = useState<string | null>(null);
-  const [imageContextInfo, setImageContextInfo] = useState<string | null>(null);
-  const [fileType, setFileType] = useState<'image' | 'pdf'>('image');
-  const [fileName, setFileName] = useState<string>('');
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [fileError, setFileError] = useState<string | null>(null);
   const [isListening, setIsListening] = useState(false);
   const recognitionRef = useRef<any>(null);
-  const [showCropper, setShowCropper] = useState(false);
-  const [originalImage, setOriginalImage] = useState<string | null>(null);
+  
+  // Cropper State
+  const [editingAttachmentId, setEditingAttachmentId] = useState<string | null>(null);
   const [selections, setSelections] = useState<SelectionRect[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
@@ -53,65 +61,63 @@ const InputArea: React.FC<InputAreaProps> = ({ onSendMessage, isLoading }) => {
     };
   }, []);
 
-  // Setup Global Drag and Drop Listeners
+  // Setup Global Drag and Drop and Paste Listeners
   useEffect(() => {
     let dragCounter = 0;
 
     const handleWindowDragEnter = (e: DragEvent) => {
-      e.preventDefault();
-      e.stopPropagation();
+      e.preventDefault(); e.stopPropagation();
       dragCounter++;
-      if (e.dataTransfer && e.dataTransfer.items && e.dataTransfer.items.length > 0) {
-        setIsDragOver(true);
-      }
+      if (e.dataTransfer && e.dataTransfer.items && e.dataTransfer.items.length > 0) setIsDragOver(true);
     };
 
     const handleWindowDragLeave = (e: DragEvent) => {
-      e.preventDefault();
-      e.stopPropagation();
+      e.preventDefault(); e.stopPropagation();
       dragCounter--;
-      if (dragCounter === 0) {
-        setIsDragOver(false);
-      }
+      if (dragCounter === 0) setIsDragOver(false);
     };
 
-    const handleWindowDragOver = (e: DragEvent) => {
-      e.preventDefault();
-      e.stopPropagation();
-    };
+    const handleWindowDragOver = (e: DragEvent) => { e.preventDefault(); e.stopPropagation(); };
 
     const handleWindowDrop = (e: DragEvent) => {
-      e.preventDefault();
-      e.stopPropagation();
-      setIsDragOver(false);
-      dragCounter = 0;
-      const file = e.dataTransfer?.files?.[0];
-      if (file) processFile(file);
+      e.preventDefault(); e.stopPropagation();
+      setIsDragOver(false); dragCounter = 0;
+      if (e.dataTransfer?.files) processFiles(e.dataTransfer.files);
+    };
+
+    const handleWindowPaste = (e: ClipboardEvent) => {
+      const items = e.clipboardData?.items;
+      if (!items) return;
+      const files: File[] = [];
+      for (let i = 0; i < items.length; i++) {
+        if (items[i].type.indexOf('image') !== -1) {
+          const blob = items[i].getAsFile();
+          if (blob) files.push(blob);
+        }
+      }
+      if (files.length > 0) processFiles(files);
     };
 
     window.addEventListener('dragenter', handleWindowDragEnter);
     window.addEventListener('dragleave', handleWindowDragLeave);
     window.addEventListener('dragover', handleWindowDragOver);
     window.addEventListener('drop', handleWindowDrop);
+    window.addEventListener('paste', handleWindowPaste);
 
     return () => {
       window.removeEventListener('dragenter', handleWindowDragEnter);
       window.removeEventListener('dragleave', handleWindowDragLeave);
       window.removeEventListener('dragover', handleWindowDragOver);
       window.removeEventListener('drop', handleWindowDrop);
+      window.removeEventListener('paste', handleWindowPaste);
     };
   }, []);
 
-  const toggleListening = () => {
-    isListening ? stopListening() : startListening();
-  };
+  const toggleListening = () => { isListening ? stopListening() : startListening(); };
 
   const startListening = () => {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SpeechRecognition) {
-      alert("Sorry, voice input is not supported in this browser.");
-      return;
-    }
+    if (!SpeechRecognition) { alert("Sorry, voice input is not supported in this browser."); return; }
     const recognition = new SpeechRecognition();
     recognition.lang = 'my-MM';
     recognition.continuous = false;
@@ -128,72 +134,64 @@ const InputArea: React.FC<InputAreaProps> = ({ onSendMessage, isLoading }) => {
   };
 
   const stopListening = () => {
-    if (recognitionRef.current) {
-      recognitionRef.current.stop();
-      setIsListening(false);
-    }
+    if (recognitionRef.current) { recognitionRef.current.stop(); setIsListening(false); }
   };
 
-  const processFile = (file: File) => {
+  const processFiles = (files: FileList | File[]) => {
     setFileError(null);
-    if (file.size > 10 * 1024 * 1024) {
-      setFileError("File is too large. Limit is 10MB.");
-      return;
-    }
-    const isPdf = file.type === 'application/pdf';
-    setFileType(isPdf ? 'pdf' : 'image');
-    setFileName(file.name);
-
-    const reader = new FileReader();
-    reader.onloadend = () => {
-      const result = reader.result as string;
-      if (isPdf) {
-        // PDF: Direct preview without cropping
-        setImagePreview(result);
-        setOriginalImage(null);
-        setShowCropper(false);
-        setSelections([]);
-        setActiveId(null);
-        setImageContextInfo(null);
-      } else {
-        // Image: Setup for cropping
-        setOriginalImage(result);
-        setShowCropper(true);
-        setSelections([]); 
-        setActiveId(null);
-        setImageContextInfo(null);
+    const fileArray = Array.from(files);
+    
+    fileArray.forEach(file => {
+      if (file.size > 10 * 1024 * 1024) {
+        setFileError(`File ${file.name} is too large. Limit is 10MB.`);
+        return;
       }
-    };
-    reader.readAsDataURL(file);
+
+      const isPdf = file.type === 'application/pdf';
+      const reader = new FileReader();
+      
+      reader.onloadend = () => {
+        const result = reader.result as string;
+        setAttachments(prev => [...prev, {
+          id: Date.now().toString() + Math.random().toString(),
+          file,
+          preview: result, // For PDF this is base64, for Image this is base64 (which is also original)
+          original: isPdf ? undefined : result, // Only keep original for images for cropping
+          type: isPdf ? 'pdf' : 'image'
+        }]);
+      };
+      reader.readAsDataURL(file);
+    });
   };
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) processFile(file);
+    if (e.target.files) processFiles(e.target.files);
     e.target.value = '';
   };
 
-  const clearImage = () => {
-    setImagePreview(null);
-    setOriginalImage(null);
-    setSelections([]);
-    setActiveId(null);
-    setImageContextInfo(null);
-    setFileType('image');
-    setFileName('');
-    setFileError(null);
-    if (fileInputRef.current) fileInputRef.current.value = '';
+  const removeAttachment = (id: string) => {
+    setAttachments(prev => prev.filter(a => a.id !== id));
   };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if ((text.trim() || imagePreview) && !isLoading && !fileError) {
-      const finalText = imageContextInfo 
-        ? `${text}\n\n[Image Formatting Instructions]:\n${imageContextInfo}` 
+    if ((text.trim() || attachments.length > 0) && !isLoading && !fileError) {
+      // Collect context info from attachments
+      const contextNotes = attachments
+        .map((a, i) => a.contextInfo ? `[Image ${i + 1} Context]:\n${a.contextInfo}` : '')
+        .filter(Boolean)
+        .join('\n\n');
+
+      const finalText = contextNotes 
+        ? `${text}\n\n[Formatting Instructions]:\n${contextNotes}` 
         : text;
-      onSendMessage(finalText, imagePreview || undefined);
+      
+      const images = attachments.map(a => a.preview);
+      onSendMessage(finalText, images.length > 0 ? images : undefined);
+      
       setText('');
-      clearImage();
+      setAttachments([]);
+      setFileError(null);
     }
   };
 
@@ -205,6 +203,14 @@ const InputArea: React.FC<InputAreaProps> = ({ onSendMessage, isLoading }) => {
   };
 
   // --- Cropping Interaction Logic ---
+  
+  const openCropper = (attachment: Attachment) => {
+    if (attachment.type === 'pdf') return; // Cannot crop PDF
+    setEditingAttachmentId(attachment.id);
+    setSelections(attachment.selections || []);
+    setActiveId(null);
+  };
+
   const handleContainerMouseDown = (e: React.MouseEvent) => {
     if (!containerRef.current) return;
     const rect = containerRef.current.getBoundingClientRect();
@@ -219,8 +225,7 @@ const InputArea: React.FC<InputAreaProps> = ({ onSendMessage, isLoading }) => {
   };
 
   const handleBoxMouseDown = (e: React.MouseEvent, id: string) => {
-    e.stopPropagation();
-    e.preventDefault();
+    e.stopPropagation(); e.preventDefault();
     if (!containerRef.current) return;
     const box = selections.find(s => s.id === id);
     if (!box) return;
@@ -249,7 +254,6 @@ const InputArea: React.FC<InputAreaProps> = ({ onSendMessage, isLoading }) => {
       const boundedY = Math.max(0, y);
       const boundedW = Math.min(w, rect.width - boundedX);
       const boundedH = Math.min(h, rect.height - boundedY);
-
       setSelections(prev => prev.map(sel => sel.id === activeId ? { ...sel, x: boundedX, y: boundedY, w: boundedW, h: boundedH } : sel));
     } else if (dragAction === 'move' && dragOffset) {
       const deltaX = currentX - dragStart.x;
@@ -289,36 +293,53 @@ const InputArea: React.FC<InputAreaProps> = ({ onSendMessage, isLoading }) => {
   };
 
   const confirmCrop = () => {
-    const activeSelection = selections.find(s => s.id === activeId);
-    if (!imageRef.current || !activeSelection || activeSelection.w < 5) {
-       if (selections.length > 0) { processCrop(selections[0]); return; }
-       else { confirmFullImage(); return; }
-    }
-    processCrop(activeSelection);
-  };
+    if (!editingAttachmentId || !imageRef.current) return;
 
-  const processCrop = (selection: SelectionRect) => {
-    if (!imageRef.current) return;
+    // If only one region selected, crop to it. If multiple, use analyze all logic.
+    const activeSelection = selections.find(s => s.id === activeId);
+    
+    // Fallback: If no active but selections exist, use the first one.
+    const targetSelection = activeSelection || (selections.length > 0 ? selections[0] : null);
+
+    if (!targetSelection) {
+      // Revert to full image
+      setAttachments(prev => prev.map(a => a.id === editingAttachmentId ? {
+        ...a,
+        preview: a.original || a.preview,
+        selections: [],
+        contextInfo: null
+      } : a));
+      setEditingAttachmentId(null);
+      return;
+    }
+
+    // Single Crop Logic
     const canvas = document.createElement('canvas');
     const image = imageRef.current;
     const scaleX = image.naturalWidth / image.width;
     const scaleY = image.naturalHeight / image.height;
-    canvas.width = selection.w * scaleX;
-    canvas.height = selection.h * scaleY;
+    canvas.width = targetSelection.w * scaleX;
+    canvas.height = targetSelection.h * scaleY;
     const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-    ctx.drawImage(image, selection.x * scaleX, selection.y * scaleY, selection.w * scaleX, selection.h * scaleY, 0, 0, canvas.width, canvas.height);
     
-    const croppedBase64 = canvas.toDataURL('image/jpeg', 0.95);
-    setImagePreview(croppedBase64);
-    setFileType('image');
-    if (selection.style !== 'normal') setImageContextInfo(`The content is marked as **${selection.style.toUpperCase()}**. Output as ${selection.style}.`);
-    else setImageContextInfo(null);
-    setShowCropper(false);
+    if (ctx) {
+      ctx.drawImage(image, targetSelection.x * scaleX, targetSelection.y * scaleY, targetSelection.w * scaleX, targetSelection.h * scaleY, 0, 0, canvas.width, canvas.height);
+      const croppedBase64 = canvas.toDataURL('image/jpeg', 0.95);
+      
+      const note = targetSelection.style !== 'normal' ? `The content is marked as **${targetSelection.style.toUpperCase()}**.` : null;
+      
+      setAttachments(prev => prev.map(a => a.id === editingAttachmentId ? {
+        ...a,
+        preview: croppedBase64,
+        selections: selections, // Save selection state to re-edit
+        contextInfo: note
+      } : a));
+    }
+    setEditingAttachmentId(null);
   };
 
   const confirmAnalyzeAll = () => {
-    if (!imageRef.current || selections.length === 0) return;
+    if (!imageRef.current || selections.length === 0 || !editingAttachmentId) return;
     const image = imageRef.current;
     const scaleX = image.naturalWidth / image.width;
     const scaleY = image.naturalHeight / image.height;
@@ -342,32 +363,39 @@ const InputArea: React.FC<InputAreaProps> = ({ onSendMessage, isLoading }) => {
       contextNotes += sel.style !== 'normal' ? `- Region ${index+1} is **${sel.style.toUpperCase()}**.\n` : `- Region ${index+1}: Normal.\n`;
       currentY += (sel.h * scaleY) + 50;
     });
-    setImagePreview(canvas.toDataURL('image/jpeg', 0.90));
-    setFileType('image');
-    setImageContextInfo(contextNotes);
-    setShowCropper(false);
+    
+    setAttachments(prev => prev.map(a => a.id === editingAttachmentId ? {
+        ...a,
+        preview: canvas.toDataURL('image/jpeg', 0.90),
+        selections: selections,
+        contextInfo: contextNotes
+      } : a));
+    setEditingAttachmentId(null);
   };
 
   const confirmFullImage = () => {
-    setImagePreview(originalImage);
-    setFileType('image');
-    setImageContextInfo(null);
-    setShowCropper(false);
+    if (!editingAttachmentId) return;
+    setAttachments(prev => prev.map(a => a.id === editingAttachmentId ? {
+      ...a,
+      preview: a.original || a.preview,
+      selections: [],
+      contextInfo: null
+    } : a));
+    setEditingAttachmentId(null);
   };
 
   const cancelCrop = () => {
-    setOriginalImage(null);
-    setShowCropper(false);
+    setEditingAttachmentId(null);
     setSelections([]);
     setActiveId(null);
-    setImageContextInfo(null);
-    if (fileInputRef.current) fileInputRef.current.value = '';
   };
+
+  const editingAttachment = attachments.find(a => a.id === editingAttachmentId);
 
   return (
     <>
       {/* Image Cropper Modal */}
-      {showCropper && originalImage && (
+      {editingAttachment && editingAttachment.original && (
         <div className="fixed inset-0 bg-stone-900/95 z-50 flex flex-col backdrop-blur-sm animate-in fade-in duration-300">
           <div className="flex-1 relative overflow-hidden flex items-center justify-center p-6">
             <div 
@@ -378,7 +406,7 @@ const InputArea: React.FC<InputAreaProps> = ({ onSendMessage, isLoading }) => {
               onMouseUp={handleMouseUp}
               onMouseLeave={handleMouseUp}
             >
-              <img ref={imageRef} src={originalImage} alt="Crop" className="max-h-[70vh] max-w-full block pointer-events-none" draggable={false} />
+              <img ref={imageRef} src={editingAttachment.original} alt="Crop" className="max-h-[70vh] max-w-full block pointer-events-none" draggable={false} />
               {selections.map((sel, idx) => {
                 const isActive = sel.id === activeId;
                 return (
@@ -409,6 +437,7 @@ const InputArea: React.FC<InputAreaProps> = ({ onSendMessage, isLoading }) => {
                 </div>
                 <div className="flex gap-3">
                   <button onClick={cancelCrop} className="px-4 py-2 text-stone-400 hover:text-white transition-colors font-medium">Cancel</button>
+                  <button onClick={confirmFullImage} className="px-4 py-2 bg-stone-800 text-stone-300 rounded-xl hover:text-white transition-colors">Reset</button>
                   <button onClick={confirmAnalyzeAll} disabled={selections.length < 2} className="px-4 py-2 bg-stone-800 text-white rounded-xl disabled:opacity-50 hover:bg-stone-700 transition-colors">All Regions</button>
                   <button onClick={confirmCrop} className="px-6 py-2 bg-sakura-600 text-white rounded-xl font-bold hover:bg-sakura-500 transition-colors shadow-lg shadow-sakura-900/50">Done</button>
                 </div>
@@ -423,7 +452,7 @@ const InputArea: React.FC<InputAreaProps> = ({ onSendMessage, isLoading }) => {
         {isDragOver && (
           <div className="absolute inset-0 z-30 bg-sakura-500/10 backdrop-blur-sm border-2 border-dashed border-sakura-400 flex flex-col items-center justify-center text-sakura-600 m-4 rounded-3xl animate-pulse pointer-events-auto">
              <UploadCloud size={48} className="mb-4 drop-shadow-md" />
-             <p className="font-bold text-lg font-display">Drop file to analyze</p>
+             <p className="font-bold text-lg font-display">Drop files to analyze</p>
           </div>
         )}
 
@@ -439,33 +468,43 @@ const InputArea: React.FC<InputAreaProps> = ({ onSendMessage, isLoading }) => {
                </div>
             )}
 
-            {/* Previews */}
-            {imagePreview && (
-              <div className="absolute -top-24 left-4 animate-in slide-in-from-bottom-4 fade-in duration-300">
-                 <div className="relative group/preview">
-                   {fileType === 'pdf' ? (
-                     <div className="h-20 bg-red-50 border border-red-100 rounded-2xl p-3 flex items-center gap-3 shadow-lg shadow-red-100/50">
-                       <div className="bg-red-100 p-2 rounded-xl"><FileStack className="text-red-500" size={20} /></div>
-                       <div className="flex flex-col max-w-[120px]">
-                         <span className="text-[10px] font-bold text-red-800 uppercase">PDF Context</span>
-                         <span className="text-xs text-red-600 truncate">{fileName}</span>
-                       </div>
+            {/* Attachments List */}
+            {attachments.length > 0 && (
+              <div className="absolute -top-24 left-4 right-4 flex gap-3 overflow-x-auto pb-2 scrollbar-hide animate-in slide-in-from-bottom-4 fade-in duration-300">
+                 {attachments.map((att) => (
+                   <div key={att.id} className="relative group/preview shrink-0">
+                     <div 
+                        className="h-20 w-20 rounded-2xl overflow-hidden border-2 border-white shadow-lg shadow-stone-200 bg-white cursor-pointer"
+                        onClick={() => openCropper(att)}
+                        title={att.type === 'pdf' ? 'PDF Document' : 'Click to crop/edit'}
+                     >
+                        {att.type === 'pdf' ? (
+                           <div className="h-full w-full flex flex-col items-center justify-center bg-red-50 p-1">
+                              <FileStack className="text-red-500 mb-1" size={24} />
+                              <span className="text-[8px] font-bold text-red-800 uppercase truncate w-full text-center">PDF</span>
+                           </div>
+                        ) : (
+                           <img src={att.preview} alt="Preview" className="h-full w-full object-cover" />
+                        )}
+                        
+                        {/* Edit Overlay for Images */}
+                        {att.type === 'image' && (
+                          <div className="absolute inset-0 bg-black/20 opacity-0 group-hover/preview:opacity-100 transition-opacity flex items-center justify-center">
+                             <Edit size={16} className="text-white drop-shadow-md" />
+                          </div>
+                        )}
                      </div>
-                   ) : (
-                     <div className="h-20 rounded-2xl overflow-hidden border-2 border-white shadow-lg shadow-stone-200">
-                        <img src={imagePreview} alt="Preview" className="h-full w-auto" />
-                     </div>
-                   )}
-                   <button onClick={clearImage} className="absolute -top-2 -right-2 bg-stone-800 text-white rounded-full p-1 shadow-md hover:bg-red-500 transition-colors"><X size={12} /></button>
-                 </div>
+                     <button onClick={(e) => { e.stopPropagation(); removeAttachment(att.id); }} className="absolute -top-2 -right-2 bg-stone-800 text-white rounded-full p-1 shadow-md hover:bg-red-500 transition-colors z-10"><X size={12} /></button>
+                   </div>
+                 ))}
               </div>
             )}
 
             <form onSubmit={handleSubmit} className="flex items-end gap-2">
-              <input type="file" accept="image/*,application/pdf" ref={fileInputRef} className="hidden" onChange={handleFileUpload} />
+              <input type="file" multiple accept="image/*,application/pdf" ref={fileInputRef} className="hidden" onChange={handleFileUpload} />
               
               <div className="flex items-center gap-1 pl-1 pb-1">
-                 <button type="button" onClick={() => fileInputRef.current?.click()} className="p-3 text-stone-400 hover:text-stone-800 hover:bg-stone-100 rounded-xl transition-colors" title="Upload"><Paperclip size={20} /></button>
+                 <button type="button" onClick={() => fileInputRef.current?.click()} className="p-3 text-stone-400 hover:text-stone-800 hover:bg-stone-100 rounded-xl transition-colors" title="Upload files"><Paperclip size={20} /></button>
                  <button type="button" onClick={toggleListening} className={`p-3 rounded-xl transition-all ${isListening ? 'bg-red-50 text-red-500 animate-pulse' : 'text-stone-400 hover:text-stone-800 hover:bg-stone-100'}`} title="Voice"><Mic size={20} /></button>
               </div>
 
@@ -474,7 +513,7 @@ const InputArea: React.FC<InputAreaProps> = ({ onSendMessage, isLoading }) => {
                    value={text}
                    onChange={(e) => setText(e.target.value)}
                    onKeyDown={handleKeyDown}
-                   placeholder={isListening ? "Listening..." : "Ask Sensei..."}
+                   placeholder={isListening ? "Listening..." : "Paste images, upload files, or ask Sensei..."}
                    className="w-full bg-transparent border-0 focus:ring-0 p-0 text-stone-800 placeholder:text-stone-400 font-mm resize-none max-h-[120px] text-base leading-relaxed"
                    rows={1}
                  />
@@ -483,8 +522,8 @@ const InputArea: React.FC<InputAreaProps> = ({ onSendMessage, isLoading }) => {
               <div className="pb-1 pr-1">
                  <button 
                    type="submit" 
-                   disabled={(!text.trim() && !imagePreview) || isLoading}
-                   className={`p-3.5 rounded-xl transition-all duration-300 shadow-lg ${(!text.trim() && !imagePreview) || isLoading ? 'bg-stone-100 text-stone-300 shadow-none' : 'bg-stone-800 text-white hover:bg-stone-900 hover:scale-105 shadow-stone-400/50'}`}
+                   disabled={(!text.trim() && attachments.length === 0) || isLoading}
+                   className={`p-3.5 rounded-xl transition-all duration-300 shadow-lg ${(!text.trim() && attachments.length === 0) || isLoading ? 'bg-stone-100 text-stone-300 shadow-none' : 'bg-stone-800 text-white hover:bg-stone-900 hover:scale-105 shadow-stone-400/50'}`}
                  >
                    <Send size={18} />
                  </button>

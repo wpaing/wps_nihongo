@@ -24,7 +24,7 @@ interface GeminiResponse {
 
 export const generateResponse = async (
   prompt: string,
-  attachmentBase64: string | undefined,
+  attachmentBase64s: string[] | undefined,
   section: AppSection
 ): Promise<GeminiResponse> => {
   try {
@@ -49,48 +49,57 @@ export const generateResponse = async (
     const systemInstruction = baseInstruction + jsonInstruction;
 
     let contents: any = null;
+    const parts: any[] = [];
 
-    if (attachmentBase64) {
-      // Robust Base64 parsing (Memory efficient - avoids regex on full string)
-      let mimeType = "image/jpeg"; // Default fallback
-      let data = attachmentBase64;
-
-      const commaIndex = attachmentBase64.indexOf(',');
-      if (commaIndex !== -1) {
-        // Parse Header: data:application/pdf;base64
-        const header = attachmentBase64.slice(0, commaIndex);
-        const mimeMatch = header.match(/^data:(.*);base64$/);
-        if (mimeMatch) {
-          mimeType = mimeMatch[1];
-        }
-        // Extract Data (Slice is safer than split for large strings)
-        data = attachmentBase64.slice(commaIndex + 1);
-      } else {
-        // Handle raw base64 case if no header exists
-        data = attachmentBase64; 
-      }
+    // Handle Attachments (Multiple)
+    if (attachmentBase64s && attachmentBase64s.length > 0) {
       
-      // Specific prompt handling for PDFs to ensure full context usage
-      let finalPrompt = prompt || "Please analyze this document/image based on the section context.";
-      if (mimeType === "application/pdf") {
-        finalPrompt = `Based on the entire content of the attached PDF document (all pages), please answer: ${finalPrompt}`;
+      let isPdfContext = false;
+
+      for (const base64 of attachmentBase64s) {
+        let mimeType = "image/jpeg"; // Default fallback
+        let data = base64;
+
+        const commaIndex = base64.indexOf(',');
+        if (commaIndex !== -1) {
+          // Parse Header: data:application/pdf;base64
+          const header = base64.slice(0, commaIndex);
+          const mimeMatch = header.match(/^data:(.*);base64$/);
+          if (mimeMatch) {
+            mimeType = mimeMatch[1];
+          }
+          // Extract Data
+          data = base64.slice(commaIndex + 1);
+        }
+
+        if (mimeType === "application/pdf") {
+          isPdfContext = true;
+        }
+
+        parts.push({
+          inlineData: {
+            mimeType: mimeType,
+            data: data,
+          },
+        });
       }
+
+      // Add the text prompt as the last part
+      let finalPrompt = prompt || "Please analyze this content based on the section context.";
+      
+      if (isPdfContext) {
+        finalPrompt = `Based on the entire content of the attached document(s), please answer: ${finalPrompt}`;
+      }
+
+      parts.push({ text: finalPrompt });
 
       contents = {
         role: "user",
-        parts: [
-          {
-            inlineData: {
-              mimeType: mimeType,
-              data: data,
-            },
-          },
-          {
-            text: finalPrompt,
-          },
-        ],
+        parts: parts,
       };
+
     } else {
+      // Text only
       contents = {
         role: "user",
         parts: [{ text: prompt }],
