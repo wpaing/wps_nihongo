@@ -1,4 +1,3 @@
-
 import { GoogleGenAI } from "@google/genai";
 import { AppSection, WebSource } from "../types";
 import { SYSTEM_INSTRUCTIONS } from "../constants";
@@ -88,7 +87,13 @@ export const generateResponse = async (
       let finalPrompt = prompt || "Please analyze this content based on the section context.";
       
       if (isPdfContext) {
-        finalPrompt = `Based on the entire content of the attached document(s), please answer: ${finalPrompt}`;
+        finalPrompt = `You have been provided with one or more PDF documents. 
+        IMPORTANT: You must read and process the entire content of the attached document(s) from beginning to end, not just the first page.
+        
+        Task:
+        ${finalPrompt}
+        
+        If the document is long, provide a comprehensive summary and analysis covering all key sections.`;
       }
 
       parts.push({ text: finalPrompt });

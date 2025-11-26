@@ -1,15 +1,8 @@
-
 import { Flashcard, VocabularyItem } from "../types";
 
 // SuperMemo 2 Algorithm simplified
 export const calculateReview = (card: Flashcard, quality: number): Flashcard => {
   // quality: 0 (Complete blackout) - 5 (Perfect)
-  // Anki Buttons Mapping: 
-  // Again (1) -> quality < 3 (reset)
-  // Hard (2) -> quality 3
-  // Good (3) -> quality 4
-  // Easy (4) -> quality 5
-
   let { repetition, interval, ef } = card;
 
   if (quality >= 3) {
@@ -52,24 +45,103 @@ export const createFlashcard = (vocab: VocabularyItem): Flashcard => {
   };
 };
 
-// Local Storage Keys
-const STORAGE_KEY = "nihongo_sensei_flashcards";
+// --- IndexedDB Implementation for Unlimited Storage ---
 
-export const loadFlashcards = (): Flashcard[] => {
+const DB_NAME = 'NihongoWPS_DB';
+const STORE_NAME = 'flashcards';
+const DB_VERSION = 1;
+
+const openDB = (): Promise<IDBDatabase> => {
+  return new Promise((resolve, reject) => {
+    // Check if IndexedDB is supported
+    if (!('indexedDB' in window)) {
+        reject(new Error("This browser doesn't support IndexedDB"));
+        return;
+    }
+
+    const request = indexedDB.open(DB_NAME, DB_VERSION);
+    
+    request.onupgradeneeded = (event) => {
+      const db = (event.target as IDBOpenDBRequest).result;
+      if (!db.objectStoreNames.contains(STORE_NAME)) {
+        db.createObjectStore(STORE_NAME, { keyPath: 'id' });
+      }
+    };
+
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+};
+
+const LS_KEY = "nihongo_sensei_flashcards";
+
+export const loadFlashcards = async (): Promise<Flashcard[]> => {
+  // Migration Strategy: Check LocalStorage first to preserve old data
   try {
-    const stored = localStorage.getItem(STORAGE_KEY);
-    return stored ? JSON.parse(stored) : [];
+    const lsData = localStorage.getItem(LS_KEY);
+    if (lsData) {
+      console.log("Migrating flashcards from LocalStorage to IndexedDB...");
+      const cards = JSON.parse(lsData);
+      if (Array.isArray(cards) && cards.length > 0) {
+          // Migrate to IDB
+          await saveFlashcards(cards);
+          console.log("Migration successful.");
+      }
+      // Clear LS to free up space and prevent re-migration
+      localStorage.removeItem(LS_KEY);
+      return cards;
+    }
   } catch (e) {
-    console.error("Failed to load flashcards", e);
+    console.error("Migration error:", e);
+  }
+
+  // Load from IndexedDB
+  try {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE_NAME, 'readonly');
+      const store = tx.objectStore(STORE_NAME);
+      const request = store.getAll();
+      request.onsuccess = () => resolve(request.result || []);
+      request.onerror = () => reject(request.error);
+    });
+  } catch (e) {
+    console.error("IDB Load Error:", e);
     return [];
   }
 };
 
-export const saveFlashcards = (cards: Flashcard[]) => {
+export const saveFlashcards = async (cards: Flashcard[]) => {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(cards));
+    const db = await openDB();
+    return new Promise<void>((resolve, reject) => {
+      const tx = db.transaction(STORE_NAME, 'readwrite');
+      const store = tx.objectStore(STORE_NAME);
+      
+      // Perform an atomic update: Clear then Put
+      // This is safe within a transaction; if put fails, clear is rolled back.
+      const clearReq = store.clear();
+      
+      clearReq.onsuccess = () => {
+        if (cards.length === 0) return;
+        
+        // Insert all cards
+        cards.forEach(card => {
+             store.put(card);
+        });
+      };
+
+      tx.oncomplete = () => {
+        resolve();
+      };
+      
+      tx.onerror = (event) => {
+        console.error("Transaction failed", event);
+        reject(tx.error);
+      };
+    });
   } catch (e) {
-    console.error("Failed to save flashcards", e);
+    console.error("IDB Save Error:", e);
   }
 };
 
@@ -87,31 +159,13 @@ export interface DeckStats {
 
 export const getDeckStats = (cards: Flashcard[]): DeckStats => {
   const now = Date.now();
-  let stats = { new: 0, learning: 0, review: 0, total: cards.length };
-
-  cards.forEach(card => {
-    if (card.repetition === 0) {
-      stats.new++;
-    } else if (card.repetition < 3) {
-      // Young cards (Learning)
-      if (card.nextReview <= now) stats.learning++;
-    } else {
-      // Mature cards (Review)
-      if (card.nextReview <= now) stats.review++;
-    }
-  });
-
-  // Normalize: "Learning" in this context basically means due items that aren't "New" or "Mature"
-  // For simplicity in this app:
-  // New: Never studied (repetition 0)
-  // Review: Due (nextReview <= now) AND studied at least once
   
   const newCards = cards.filter(c => c.repetition === 0);
   const reviewCards = cards.filter(c => c.repetition > 0 && c.nextReview <= now);
   
   return {
     new: newCards.length,
-    learning: 0, // Simplified for this UI
+    learning: 0, // Simplified for this implementation
     review: reviewCards.length,
     total: cards.length
   };

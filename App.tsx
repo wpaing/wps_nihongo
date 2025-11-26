@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useRef } from 'react';
 import { AppSection, Message, VocabularyItem, Flashcard, ChatSession } from './types';
 import { SECTIONS, APP_NAME } from './constants';
@@ -9,11 +8,14 @@ import InputArea from './components/InputArea';
 import FlashcardReview from './components/FlashcardReview';
 import { exportToPDF, exportToCSV, exportToTXT } from './utils/exportUtils';
 import { createFlashcard, loadFlashcards, saveFlashcards } from './utils/srsUtils';
-import { Menu, Download, FileText, Sheet, FileType, Minus, Plus, Type, Undo2 } from 'lucide-react';
+import { Menu, Download, FileText, Sheet, FileType, Minus, Plus, Type, Undo2, Moon, Sun } from 'lucide-react';
+import { ThemeProvider, useTheme } from './ThemeContext';
 
 const SESSIONS_STORAGE_KEY = 'nihongo_sensei_sessions';
 
-const App: React.FC = () => {
+// Inner App Component to use the Theme Hook
+const AppContent: React.FC = () => {
+  const { theme, toggleTheme } = useTheme();
   const [currentSection, setCurrentSection] = useState<AppSection>(AppSection.READING);
   const [messages, setMessages] = useState<Message[]>([]);
   const [sessions, setSessions] = useState<ChatSession[]>([]);
@@ -24,14 +26,30 @@ const App: React.FC = () => {
   const [fontSizeLevel, setFontSizeLevel] = useState(1);
   const [flashcards, setFlashcards] = useState<Flashcard[]>([]);
   
+  // Refs for Auto-save to access latest state inside interval
+  const sessionsRef = useRef(sessions);
+
   // Undo State
   const [deletedSession, setDeletedSession] = useState<ChatSession | null>(null);
-  const undoTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const undoTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Load Flashcards
-  useEffect(() => { setFlashcards(loadFlashcards()); }, []);
+  // Load Flashcards (Async from IndexedDB)
+  useEffect(() => { 
+    const initCards = async () => {
+      try {
+        const cards = await loadFlashcards();
+        setFlashcards(cards);
+      } catch (error) {
+        console.error("Failed to load flashcards:", error);
+      }
+    };
+    initCards();
+  }, []);
+
+  // Sync refs for auto-save logic
+  useEffect(() => { sessionsRef.current = sessions; }, [sessions]);
   
-  // Chat History: Load Sessions
+  // Chat History: Load Sessions on Mount
   useEffect(() => {
     try {
       const storedSessions = localStorage.getItem(SESSIONS_STORAGE_KEY);
@@ -48,11 +66,39 @@ const App: React.FC = () => {
     } catch (e) { console.error(e); }
   }, []);
 
-  // Chat History: Save Sessions
+  // --- Auto-Save Mechanism (Every 60s) ---
   useEffect(() => {
-    if (sessions.length > 0) localStorage.setItem(SESSIONS_STORAGE_KEY, JSON.stringify(sessions));
-    else localStorage.setItem(SESSIONS_STORAGE_KEY, JSON.stringify([]));
-  }, [sessions]);
+    const SAVE_INTERVAL_MS = 60000; // 60 seconds
+    
+    const intervalId = setInterval(() => {
+      // Save Sessions to LocalStorage
+      if (sessionsRef.current.length > 0) {
+        try {
+          // We intentionally use localStorage for Chat History as requested.
+          // Note: LocalStorage has a limit (~5MB).
+          localStorage.setItem(SESSIONS_STORAGE_KEY, JSON.stringify(sessionsRef.current));
+          console.debug('Auto-saved sessions to LocalStorage');
+        } catch (e) {
+          console.error("Auto-save failed (Storage Full?)", e);
+        }
+      }
+    }, SAVE_INTERVAL_MS);
+
+    // Safety: Save on tab close
+    const handleBeforeUnload = () => {
+       if (sessionsRef.current.length > 0) {
+         try {
+            localStorage.setItem(SESSIONS_STORAGE_KEY, JSON.stringify(sessionsRef.current));
+         } catch (e) { /* ignore on close */ }
+       }
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+
+    return () => {
+      clearInterval(intervalId);
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+    };
+  }, []);
 
   // Sync Messages to Current Session
   useEffect(() => {
@@ -163,10 +209,10 @@ const App: React.FC = () => {
     }
   };
 
-  const handleAddFlashcard = (vocab: VocabularyItem) => {
+  const handleAddFlashcard = async (vocab: VocabularyItem) => {
     const updatedCards = [...flashcards, createFlashcard(vocab)];
     setFlashcards(updatedCards);
-    saveFlashcards(updatedCards);
+    await saveFlashcards(updatedCards);
   };
 
   const currentSectionInfo = SECTIONS.find(s => s.id === currentSection);
@@ -233,12 +279,32 @@ const App: React.FC = () => {
     }
   };
 
+  const handleRetry = () => {
+    // Find last user message
+    const reversedMessages = [...messages].reverse();
+    const lastUserMessage = reversedMessages.find(m => m.role === 'user');
+    
+    if (lastUserMessage && !isLoading) {
+      handleSendMessage(lastUserMessage.text, lastUserMessage.images);
+    }
+  };
+
+  const handleClearAllSessions = () => {
+    if (window.confirm("Are you sure you want to delete all chat history? This cannot be undone.")) {
+      setSessions([]);
+      setMessages([]);
+      setCurrentSessionId(null);
+      localStorage.removeItem(SESSIONS_STORAGE_KEY);
+      handleNewChat();
+    }
+  };
+
   return (
-    <div className="flex h-[100dvh] overflow-hidden text-stone-800 font-sans antialiased bg-stone-50">
+    <div className="flex h-[100dvh] overflow-hidden font-sans antialiased bg-stone-50 dark:bg-stone-950 text-stone-800 dark:text-stone-100 transition-colors duration-300">
       
       {/* Undo Delete Toast */}
       {deletedSession && (
-        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 bg-stone-900 text-white px-6 py-3 rounded-xl shadow-2xl flex items-center gap-4 animate-in slide-in-from-bottom-4 fade-in">
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 bg-stone-900 dark:bg-stone-800 text-white px-6 py-3 rounded-xl shadow-2xl flex items-center gap-4 animate-in slide-in-from-bottom-4 fade-in border border-stone-800 dark:border-stone-700">
            <span>Chat deleted</span>
            <button onClick={handleUndoDelete} className="text-sakura-400 font-bold hover:text-sakura-300 flex items-center gap-1">
              <Undo2 size={16} /> Undo
@@ -259,40 +325,50 @@ const App: React.FC = () => {
         onRenameSession={handleRenameSession}
         onPinSession={handlePinSession}
         onExportSession={handleExportSessionPDF}
+        onClearAllSessions={handleClearAllSessions}
       />
       
-      <div className="flex-1 flex flex-col min-w-0 relative bg-stone-50/50 h-[100dvh]">
+      <div className="flex-1 flex flex-col min-w-0 relative bg-stone-50/50 dark:bg-stone-950/50 h-[100dvh]">
         {/* Glass Header */}
-        <header className="h-16 md:h-20 absolute top-0 left-0 right-0 z-20 px-4 md:px-6 flex items-center justify-between bg-white/80 backdrop-blur-md border-b border-stone-100/50 transition-all">
+        <header className="h-16 md:h-20 absolute top-0 left-0 right-0 z-20 px-4 md:px-6 flex items-center justify-between bg-white/80 dark:bg-stone-900/80 backdrop-blur-md border-b border-stone-100/50 dark:border-stone-800/50 transition-all">
           <div className="flex items-center gap-3 md:gap-4">
-            <button onClick={() => setIsSidebarOpen(true)} className="md:hidden p-2 text-stone-500 hover:bg-stone-100 rounded-xl active:scale-95 transition-transform"><Menu size={24} /></button>
+            <button onClick={() => setIsSidebarOpen(true)} className="md:hidden p-2 text-stone-500 dark:text-stone-400 hover:bg-stone-100 dark:hover:bg-stone-800 rounded-xl active:scale-95 transition-transform"><Menu size={24} /></button>
             <h1 className="text-lg md:text-xl font-bold flex items-center gap-2 font-display tracking-tight truncate">
-               <span className="text-stone-800 truncate">{APP_NAME}</span>
-               <span className="hidden sm:inline text-stone-300 font-light">/</span>
+               <span className="text-stone-800 dark:text-stone-100 truncate">{APP_NAME}</span>
+               <span className="hidden sm:inline text-stone-300 dark:text-stone-700 font-light">/</span>
                <span className="hidden sm:inline text-sakura-500 truncate">{currentSectionInfo?.label}</span>
             </h1>
           </div>
 
           <div className="flex items-center gap-2 md:gap-3">
+            {/* Dark Mode Toggle */}
+            <button 
+              onClick={toggleTheme} 
+              className="p-2.5 rounded-xl bg-stone-100 dark:bg-stone-800 text-stone-600 dark:text-stone-300 hover:bg-stone-200 dark:hover:bg-stone-700 transition-colors"
+              title="Toggle Theme"
+            >
+              {theme === 'dark' ? <Moon size={18} /> : <Sun size={18} />}
+            </button>
+
             {currentSection === AppSection.READING && (
-              <div className="hidden sm:flex items-center bg-stone-100/80 rounded-xl p-1 border border-stone-200/50">
-                <button onClick={() => handleFontSizeChange(-1)} disabled={fontSizeLevel === 0} className="p-2 text-stone-500 hover:bg-white rounded-lg transition-all disabled:opacity-30"><Minus size={14} /></button>
-                <div className="w-8 flex justify-center"><Type size={16} className="text-stone-400" /></div>
-                <button onClick={() => handleFontSizeChange(1)} disabled={fontSizeLevel === 3} className="p-2 text-stone-500 hover:bg-white rounded-lg transition-all disabled:opacity-30"><Plus size={14} /></button>
+              <div className="flex items-center bg-stone-100/80 dark:bg-stone-800/80 rounded-xl p-1 border border-stone-200/50 dark:border-stone-700/50">
+                <button onClick={() => handleFontSizeChange(-1)} disabled={fontSizeLevel === 0} className="p-2 text-stone-500 dark:text-stone-400 hover:bg-white dark:hover:bg-stone-700 rounded-lg transition-all disabled:opacity-30"><Minus size={14} /></button>
+                <div className="w-8 flex justify-center"><Type size={16} className="text-stone-400 dark:text-stone-500" /></div>
+                <button onClick={() => handleFontSizeChange(1)} disabled={fontSizeLevel === 3} className="p-2 text-stone-500 dark:text-stone-400 hover:bg-white dark:hover:bg-stone-700 rounded-lg transition-all disabled:opacity-30"><Plus size={14} /></button>
               </div>
             )}
             {currentSection !== AppSection.FLASHCARDS && (
               <div className="relative">
-                <button onClick={() => setIsExportMenuOpen(!isExportMenuOpen)} className="flex items-center gap-2 px-3 md:px-4 py-2 md:py-2.5 rounded-xl bg-white border border-stone-200 text-stone-600 hover:border-sakura-200 hover:text-sakura-600 shadow-sm transition-all font-bold text-xs uppercase tracking-wider">
+                <button onClick={() => setIsExportMenuOpen(!isExportMenuOpen)} className="flex items-center gap-2 px-3 md:px-4 py-2 md:py-2.5 rounded-xl bg-white dark:bg-stone-800 border border-stone-200 dark:border-stone-700 text-stone-600 dark:text-stone-300 hover:border-sakura-200 dark:hover:border-sakura-700 hover:text-sakura-600 dark:hover:text-sakura-400 shadow-sm transition-all font-bold text-xs uppercase tracking-wider">
                   <Download size={16} /><span className="hidden sm:inline">Export</span>
                 </button>
                 {isExportMenuOpen && (
                   <>
                     <div className="fixed inset-0 z-10" onClick={() => setIsExportMenuOpen(false)}></div>
-                    <div className="absolute right-0 mt-3 w-56 bg-white rounded-2xl shadow-xl shadow-stone-200 border border-stone-100 z-20 p-2 animate-in fade-in slide-in-from-top-2">
-                       <button onClick={() => { exportToTXT(messages); setIsExportMenuOpen(false); }} disabled={messages.length === 0} className="w-full flex items-center gap-3 px-4 py-3 text-sm font-medium text-stone-600 hover:bg-stone-50 rounded-xl text-left transition-colors"><FileText size={18} className="text-blue-400" /><span>Text File (.txt)</span></button>
-                       <button onClick={() => { exportToCSV(messages); setIsExportMenuOpen(false); }} disabled={messages.length === 0} className="w-full flex items-center gap-3 px-4 py-3 text-sm font-medium text-stone-600 hover:bg-stone-50 rounded-xl text-left transition-colors"><Sheet size={18} className="text-green-400" /><span>Spreadsheet (.csv)</span></button>
-                       <button onClick={() => { exportToPDF(messages); setIsExportMenuOpen(false); }} disabled={messages.length === 0} className="w-full flex items-center gap-3 px-4 py-3 text-sm font-medium text-stone-600 hover:bg-stone-50 rounded-xl text-left transition-colors"><FileType size={18} className="text-red-400" /><span>Document (.pdf)</span></button>
+                    <div className="absolute right-0 mt-3 w-56 bg-white dark:bg-stone-800 rounded-2xl shadow-xl shadow-stone-200 dark:shadow-black/50 border border-stone-100 dark:border-stone-700 z-20 p-2 animate-in fade-in slide-in-from-top-2">
+                       <button onClick={() => { exportToTXT(messages); setIsExportMenuOpen(false); }} disabled={messages.length === 0} className="w-full flex items-center gap-3 px-4 py-3 text-sm font-medium text-stone-600 dark:text-stone-300 hover:bg-stone-50 dark:hover:bg-stone-700/50 rounded-xl text-left transition-colors"><FileText size={18} className="text-blue-400" /><span>Text File (.txt)</span></button>
+                       <button onClick={() => { exportToCSV(messages); setIsExportMenuOpen(false); }} disabled={messages.length === 0} className="w-full flex items-center gap-3 px-4 py-3 text-sm font-medium text-stone-600 dark:text-stone-300 hover:bg-stone-50 dark:hover:bg-stone-700/50 rounded-xl text-left transition-colors"><Sheet size={18} className="text-green-400" /><span>Spreadsheet (.csv)</span></button>
+                       <button onClick={() => { exportToPDF(messages); setIsExportMenuOpen(false); }} disabled={messages.length === 0} className="w-full flex items-center gap-3 px-4 py-3 text-sm font-medium text-stone-600 dark:text-stone-300 hover:bg-stone-50 dark:hover:bg-stone-700/50 rounded-xl text-left transition-colors"><FileType size={18} className="text-red-400" /><span>Document (.pdf)</span></button>
                     </div>
                   </>
                 )}
@@ -303,16 +379,33 @@ const App: React.FC = () => {
 
         <div className="flex-1 pt-16 md:pt-20 relative flex flex-col overflow-hidden">
            {currentSection === AppSection.FLASHCARDS ? (
-             <div className="flex-1 overflow-y-auto bg-stone-50"><FlashcardReview allCards={flashcards} setAllCards={setFlashcards} /></div>
+             <div className="flex-1 overflow-y-auto bg-stone-50 dark:bg-stone-950"><FlashcardReview allCards={flashcards} setAllCards={setFlashcards} /></div>
            ) : (
              <>
-               <ChatArea messages={messages} isLoading={isLoading} currentSection={currentSection} onAddFlashcard={handleAddFlashcard} existingFlashcards={flashcards} fontSizeLevel={fontSizeLevel} />
+               <ChatArea 
+                  messages={messages} 
+                  isLoading={isLoading} 
+                  currentSection={currentSection} 
+                  onAddFlashcard={handleAddFlashcard} 
+                  existingFlashcards={flashcards} 
+                  fontSizeLevel={fontSizeLevel}
+                  onRetry={handleRetry} 
+               />
                <InputArea onSendMessage={handleSendMessage} isLoading={isLoading} />
              </>
            )}
         </div>
       </div>
     </div>
+  );
+};
+
+// Root wrapper to provide Context
+const App: React.FC = () => {
+  return (
+    <ThemeProvider>
+      <AppContent />
+    </ThemeProvider>
   );
 };
 
