@@ -6,6 +6,7 @@ import Sidebar from './components/Sidebar';
 import ChatArea from './components/ChatArea';
 import InputArea from './components/InputArea';
 import FlashcardReview from './components/FlashcardReview';
+import LiveConversation from './components/LiveConversation';
 import { exportToPDF, exportToCSV, exportToTXT } from './utils/exportUtils';
 import { createFlashcard, loadFlashcards, saveFlashcards } from './utils/srsUtils';
 import { Menu, Download, FileText, Sheet, FileType, Minus, Plus, Type, Undo2, Moon, Sun } from 'lucide-react';
@@ -215,6 +216,30 @@ const AppContent: React.FC = () => {
     await saveFlashcards(updatedCards);
   };
 
+  // --- Live Session Saver ---
+  const handleSaveLiveSession = (transcriptMessages: Message[]) => {
+    if (transcriptMessages.length === 0) return;
+
+    const timestamp = Date.now();
+    const newSessionId = `live_${timestamp}`;
+    const dateStr = new Date().toLocaleDateString();
+    const preview = transcriptMessages[0]?.text.slice(0, 50) || "Audio Conversation";
+
+    const newSession: ChatSession = {
+      id: newSessionId,
+      title: `Live Conversation ${dateStr}`,
+      lastModified: timestamp,
+      messages: transcriptMessages,
+      preview: preview,
+      isPinned: false
+    };
+
+    setSessions(prev => [newSession, ...prev]);
+    // Force immediate save to storage
+    const updatedSessions = [newSession, ...sessions];
+    localStorage.setItem(SESSIONS_STORAGE_KEY, JSON.stringify(updatedSessions));
+  };
+
   const currentSectionInfo = SECTIONS.find(s => s.id === currentSection);
   const handleFontSizeChange = (delta: number) => setFontSizeLevel(prev => Math.max(0, Math.min(3, prev + delta)));
 
@@ -357,7 +382,7 @@ const AppContent: React.FC = () => {
                 <button onClick={() => handleFontSizeChange(1)} disabled={fontSizeLevel === 3} className="p-2 text-stone-500 dark:text-stone-400 hover:bg-white dark:hover:bg-stone-700 rounded-lg transition-all disabled:opacity-30"><Plus size={14} /></button>
               </div>
             )}
-            {currentSection !== AppSection.FLASHCARDS && (
+            {(currentSection !== AppSection.FLASHCARDS && currentSection !== AppSection.CONVERSATION) && (
               <div className="relative">
                 <button onClick={() => setIsExportMenuOpen(!isExportMenuOpen)} className="flex items-center gap-2 px-3 md:px-4 py-2 md:py-2.5 rounded-xl bg-white dark:bg-stone-800 border border-stone-200 dark:border-stone-700 text-stone-600 dark:text-stone-300 hover:border-sakura-200 dark:hover:border-sakura-700 hover:text-sakura-600 dark:hover:text-sakura-400 shadow-sm transition-all font-bold text-xs uppercase tracking-wider">
                   <Download size={16} /><span className="hidden sm:inline">Export</span>
@@ -380,6 +405,8 @@ const AppContent: React.FC = () => {
         <div className="flex-1 pt-16 md:pt-20 relative flex flex-col overflow-hidden">
            {currentSection === AppSection.FLASHCARDS ? (
              <div className="flex-1 overflow-y-auto bg-stone-50 dark:bg-stone-950"><FlashcardReview allCards={flashcards} setAllCards={setFlashcards} /></div>
+           ) : currentSection === AppSection.CONVERSATION ? (
+             <div className="flex-1 overflow-hidden bg-stone-900"><LiveConversation onSaveSession={handleSaveLiveSession} /></div>
            ) : (
              <>
                <ChatArea 
@@ -390,6 +417,7 @@ const AppContent: React.FC = () => {
                   existingFlashcards={flashcards} 
                   fontSizeLevel={fontSizeLevel}
                   onRetry={handleRetry} 
+                  sessionId={currentSessionId}
                />
                <InputArea onSendMessage={handleSendMessage} isLoading={isLoading} />
              </>

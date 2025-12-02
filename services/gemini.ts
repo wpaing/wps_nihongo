@@ -144,3 +144,71 @@ export const generateResponse = async (
     throw new Error(error.message || "An error occurred while communicating with the AI.");
   }
 };
+
+// --- Pronunciation Analysis ---
+
+export interface PronunciationResult {
+  score: number;
+  feedback: string;
+  phonetic: string;
+}
+
+export const evaluatePronunciation = async (
+  audioBase64: string,
+  targetWord: string,
+  reading: string
+): Promise<PronunciationResult> => {
+  try {
+    const client = getClient();
+    const modelId = "gemini-2.5-flash"; // Flash handles audio inputs well
+
+    // Clean base64 header if present
+    const cleanBase64 = audioBase64.replace(/^data:audio\/\w+;base64,/, "");
+
+    const prompt = `
+    Act as a strict Japanese pronunciation coach. 
+    1. Listen to the attached audio. 
+    2. The user is trying to pronounce this word: "${targetWord}" (Reading: ${reading}).
+    3. Evaluate their pronunciation accuracy, pitch accent, and clarity.
+    
+    Respond STRICTLY in the following JSON format (no markdown formatting):
+    {
+      "score": number, // 0 to 100
+      "feedback": "string", // Specific advice on how to improve (e.g., 'Your vowel length on 'ou' was too short', 'Pitch should go down on the second syllable'). Keep it concise and helpful for a learner. You can use Myanmar language for explanations if helpful.",
+      "phonetic": "string" // What the user actually sounded like in romaji/kana
+    }
+    `;
+
+    const response = await client.models.generateContent({
+      model: modelId,
+      config: {
+        temperature: 0.1, // Low temperature for consistent JSON
+        responseMimeType: "application/json"
+      },
+      contents: [
+        {
+          role: "user",
+          parts: [
+            {
+              inlineData: {
+                mimeType: "audio/wav", // Assuming wav/webm from recorder, generic handling usually works
+                data: cleanBase64
+              }
+            },
+            { text: prompt }
+          ]
+        }
+      ]
+    });
+
+    const text = response.text;
+    if (!text) throw new Error("No response from AI");
+
+    const result = JSON.parse(text) as PronunciationResult;
+    return result;
+
+  } catch (error: any) {
+    console.error("Pronunciation API Error:", error);
+    throw new Error("Failed to evaluate pronunciation.");
+  }
+};

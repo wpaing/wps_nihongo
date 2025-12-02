@@ -1,7 +1,9 @@
 
+
 export enum AppSection {
   READING = 'reading',
   FLASHCARDS = 'flashcards',
+  CONVERSATION = 'conversation',
 }
 
 export interface VocabularyItem {
@@ -17,6 +19,7 @@ export interface Flashcard extends VocabularyItem {
   repetition: number;
   ef: number; // ease factor, default 2.5
   nextReview: number; // timestamp
+  tags?: string[]; // Optional tags for organization
 }
 
 export interface WebSource {

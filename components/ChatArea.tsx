@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useState, useMemo } from 'react';
+import React, { useRef, useEffect, useState, useMemo, useLayoutEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { Message, AppSection, VocabularyItem, Flashcard } from '../types';
 import { SECTIONS } from '../constants';
@@ -13,6 +13,7 @@ interface ChatAreaProps {
   existingFlashcards: Flashcard[];
   fontSizeLevel: number; // 0: sm, 1: base, 2: lg, 3: xl
   onRetry?: () => void;
+  sessionId: string | null;
 }
 
 const getTextFromChildren = (children: React.ReactNode): string => {
@@ -89,19 +90,50 @@ const ChatArea: React.FC<ChatAreaProps> = ({
   onAddFlashcard,
   existingFlashcards,
   fontSizeLevel,
-  onRetry
+  onRetry,
+  sessionId
 }) => {
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
   
   // Track which message IDs have been fully typed out to prevent re-typing
   const [typedMessageIds, setTypedMessageIds] = useState<Set<string>>(new Set());
 
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  // Restore scroll position on session change
+  useLayoutEffect(() => {
+    if (scrollContainerRef.current) {
+      const key = `reading_pos_${sessionId || 'draft'}`;
+      const saved = localStorage.getItem(key);
+      if (saved) {
+        scrollContainerRef.current.scrollTop = parseInt(saved, 10);
+      } else {
+        // No saved position (new chat), scroll to bottom
+        messagesEndRef.current?.scrollIntoView({ behavior: 'auto' });
+      }
+    }
+  }, [sessionId]);
+
+  // Save scroll position
+  const handleScroll = () => {
+    if (scrollContainerRef.current) {
+      const key = `reading_pos_${sessionId || 'draft'}`;
+      localStorage.setItem(key, scrollContainerRef.current.scrollTop.toString());
+    }
   };
 
+  // Auto-scroll logic for new messages / streaming
   useEffect(() => {
-    scrollToBottom();
+    if (!scrollContainerRef.current) return;
+    
+    const { scrollTop, scrollHeight, clientHeight } = scrollContainerRef.current;
+    // Tolerance for being "at the bottom" (150px)
+    const isAtBottom = scrollHeight - scrollTop - clientHeight < 150;
+
+    // We only auto-scroll if the user is already near the bottom.
+    // This prevents jumping if the user has scrolled up to read history.
+    if (isAtBottom) {
+      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    }
   }, [messages, isLoading]);
 
   const sectionInfo = SECTIONS.find(s => s.id === currentSection);
@@ -219,7 +251,11 @@ const ChatArea: React.FC<ChatAreaProps> = ({
   }), []);
 
   return (
-    <div className="flex-1 overflow-y-auto p-4 md:p-8 relative scroll-smooth">
+    <div 
+      ref={scrollContainerRef}
+      onScroll={handleScroll}
+      className="flex-1 overflow-y-auto p-4 md:p-8 relative"
+    >
       <div className="max-w-4xl mx-auto space-y-8 pb-36 md:pb-40">
         
         {messages.length === 0 && (

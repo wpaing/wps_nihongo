@@ -1,6 +1,25 @@
 import { Flashcard, VocabularyItem } from "../types";
 
 // SuperMemo 2 Algorithm simplified
+
+// Helper to calculate next interval for UI previews without modifying card
+export const getNextInterval = (card: Flashcard, quality: number): number => {
+  let { repetition, interval, ef } = card;
+
+  if (quality >= 3) {
+    if (repetition === 0) {
+      interval = 1;
+    } else if (repetition === 1) {
+      interval = 6;
+    } else {
+      interval = Math.round(interval * ef);
+    }
+  } else {
+    interval = 1;
+  }
+  return interval;
+};
+
 export const calculateReview = (card: Flashcard, quality: number): Flashcard => {
   // quality: 0 (Complete blackout) - 5 (Perfect)
   let { repetition, interval, ef } = card;
@@ -19,9 +38,12 @@ export const calculateReview = (card: Flashcard, quality: number): Flashcard => 
     interval = 1;
   }
 
-  // EF calculation
-  ef = ef + (0.1 - (5 - quality) * (0.08 + (5 - quality) * 0.02));
-  if (ef < 1.3) ef = 1.3;
+  // EF calculation (SM-2)
+  // "If the quality response was lower than 3 then start repetitions for the item from the beginning without changing the E-Factor"
+  if (quality >= 3) {
+    ef = ef + (0.1 - (5 - quality) * (0.08 + (5 - quality) * 0.02));
+    if (ef < 1.3) ef = 1.3;
+  }
 
   const nextReview = Date.now() + interval * 24 * 60 * 60 * 1000;
 
@@ -34,7 +56,7 @@ export const calculateReview = (card: Flashcard, quality: number): Flashcard => 
   };
 };
 
-export const createFlashcard = (vocab: VocabularyItem): Flashcard => {
+export const createFlashcard = (vocab: VocabularyItem, tags: string[] = []): Flashcard => {
   return {
     ...vocab,
     id: Date.now().toString() + Math.random().toString(36).substring(2, 9),
@@ -42,7 +64,44 @@ export const createFlashcard = (vocab: VocabularyItem): Flashcard => {
     repetition: 0,
     ef: 2.5,
     nextReview: Date.now(), // Due immediately
+    tags: tags
   };
+};
+
+export const parseCSVImports = (csvText: string): Flashcard[] => {
+  const lines = csvText.split(/\r?\n/);
+  const newCards: Flashcard[] = [];
+  
+  // Basic detection: Expects header or data
+  // Formats: Kanji, Kana, Romaji, Meaning, Tags(optional)
+  
+  lines.forEach((line, index) => {
+    if (!line.trim()) return;
+    
+    // Skip likely header row if it contains "kanji" case-insensitive
+    if (index === 0 && line.toLowerCase().includes('kanji')) return;
+
+    // Handle quoted CSV values roughly
+    const parts = line.split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/).map(p => p.trim().replace(/^"|"$/g, ''));
+    
+    if (parts.length >= 2) {
+      const vocab: VocabularyItem = {
+        kanji: parts[0] || '',
+        kana: parts[1] || '',
+        romaji: parts[2] || '',
+        meanings: parts[3] || '',
+      };
+      
+      const tagsString = parts[4] || '';
+      const tags = tagsString ? tagsString.split(/[;|\s]+/).filter(Boolean) : [];
+      
+      if (vocab.kanji) {
+        newCards.push(createFlashcard(vocab, tags));
+      }
+    }
+  });
+  
+  return newCards;
 };
 
 // --- IndexedDB Implementation for Unlimited Storage ---
@@ -147,7 +206,9 @@ export const saveFlashcards = async (cards: Flashcard[]) => {
 
 export const getDueCards = (cards: Flashcard[]): Flashcard[] => {
   const now = Date.now();
-  return cards.filter(card => card.nextReview <= now);
+  return cards
+    .filter(card => card.nextReview <= now)
+    .sort((a, b) => a.nextReview - b.nextReview); // Sort by due date (oldest first)
 };
 
 export interface DeckStats {
